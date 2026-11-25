@@ -143,6 +143,12 @@ export class RevoluteJoint extends Joint {
   /** @internal */ m_enableLimit: boolean;
   /** @internal */ m_enableMotor: boolean;
 
+  // Pending state changes, applied together at the start of the next solver
+  // stage so that limit/motor enable flags, motor speed and torque limits take
+  // effect atomically and accumulated impulses keep warm starting correctly.
+  /** @internal */ m_motorDirty: boolean;
+  /** @internal */ m_limitDirty: boolean;
+
   // Solver temp
   /** @internal */ m_rA: Vec2;
   /** @internal */ m_rB: Vec2;
@@ -208,6 +214,9 @@ export class RevoluteJoint extends Joint {
     this.m_enableLimit = def.enableLimit ?? DEFAULTS.enableLimit;
     this.m_enableMotor = def.enableMotor ?? DEFAULTS.enableMotor;
 
+    this.m_motorDirty = false;
+    this.m_limitDirty = false;
+
     // Point-to-point constraint
     // C = p2 - p1
     // Cdot = v2 - v1
@@ -268,7 +277,10 @@ export class RevoluteJoint extends Joint {
       this.m_referenceAngle = def.referenceAngle;
     }
     if (def.enableLimit !== undefined) {
-      this.m_enableLimit = def.enableLimit;
+      if (def.enableLimit != this.m_enableLimit) {
+        this.m_enableLimit = def.enableLimit;
+        this.m_limitDirty = true;
+      }
     }
     if (Number.isFinite(def.lowerAngle)) {
       this.m_lowerAngle = def.lowerAngle;
@@ -276,14 +288,22 @@ export class RevoluteJoint extends Joint {
     if (Number.isFinite(def.upperAngle)) {
       this.m_upperAngle = def.upperAngle;
     }
+    if (def.lowerAngle !== undefined || def.upperAngle !== undefined) {
+      this.m_limitDirty = true;
+    }
     if (Number.isFinite(def.maxMotorTorque)) {
       this.m_maxMotorTorque = def.maxMotorTorque;
+      this.m_motorDirty = true;
     }
     if (Number.isFinite(def.motorSpeed)) {
       this.m_motorSpeed = def.motorSpeed;
+      this.m_motorDirty = true;
     }
     if (def.enableMotor !== undefined) {
-      this.m_enableMotor = def.enableMotor;
+      if (def.enableMotor != this.m_enableMotor) {
+        this.m_enableMotor = def.enableMotor;
+        this.m_motorDirty = true;
+      }
     }
   }
 
@@ -334,30 +354,37 @@ export class RevoluteJoint extends Joint {
   }
 
   /**
-   * Enable/disable the joint motor.
+   * Enable/disable the joint motor. The change is committed at the start of
+   * the next solver stage together with any other pending state changes.
    */
   enableMotor(flag: boolean): void {
     if (flag == this.m_enableMotor) return;
     this.m_bodyA.setAwake(true);
     this.m_bodyB.setAwake(true);
     this.m_enableMotor = flag;
+    this.m_motorDirty = true;
   }
 
   /**
    * Get the current motor torque given the inverse time step. Unit is N*m.
+   * Returns zero while the motor is disabled.
    */
   getMotorTorque(inv_dt: number): number {
+    if (this.m_enableMotor == false) return 0.0;
     return inv_dt * this.m_motorImpulse;
   }
 
   /**
-   * Set the motor speed in radians per second.
+   * Set the motor speed in radians per second. The change is committed at the
+   * start of the next solver stage together with any other pending state
+   * changes.
    */
   setMotorSpeed(speed: number): void {
     if (speed == this.m_motorSpeed) return;
     this.m_bodyA.setAwake(true);
     this.m_bodyB.setAwake(true);
     this.m_motorSpeed = speed;
+    this.m_motorDirty = true;
   }
 
   /**
@@ -368,13 +395,16 @@ export class RevoluteJoint extends Joint {
   }
 
   /**
-   * Set the maximum motor torque, usually in N-m.
+   * Set the maximum motor torque, usually in N-m. The change is committed at
+   * the start of the next solver stage together with any other pending state
+   * changes.
    */
   setMaxMotorTorque(torque: number): void {
     if (torque == this.m_maxMotorTorque) return;
     this.m_bodyA.setAwake(true);
     this.m_bodyB.setAwake(true);
     this.m_maxMotorTorque = torque;
+    this.m_motorDirty = true;
   }
 
   getMaxMotorTorque(): number {
@@ -389,14 +419,16 @@ export class RevoluteJoint extends Joint {
   }
 
   /**
-   * Enable/disable the joint limit.
+   * Enable/disable the joint limit. The change is committed at the start of
+   * the next solver stage together with any other pending state changes, so
+   * the accumulated limit impulse keeps warm starting until then.
    */
   enableLimit(flag: boolean): void {
     if (flag != this.m_enableLimit) {
       this.m_bodyA.setAwake(true);
       this.m_bodyB.setAwake(true);
       this.m_enableLimit = flag;
-      this.m_impulse.z = 0.0;
+      this.m_limitDirty = true;
     }
   }
 
@@ -415,7 +447,8 @@ export class RevoluteJoint extends Joint {
   }
 
   /**
-   * Set the joint limits in radians.
+   * Set the joint limits in radians. The change is committed at the start of
+   * the next solver stage together with any other pending state changes.
    */
   setLimits(lower: number, upper: number): void {
     if (_ASSERT) console.assert(lower <= upper);
@@ -423,9 +456,9 @@ export class RevoluteJoint extends Joint {
     if (lower != this.m_lowerAngle || upper != this.m_upperAngle) {
       this.m_bodyA.setAwake(true);
       this.m_bodyB.setAwake(true);
-      this.m_impulse.z = 0.0;
       this.m_lowerAngle = lower;
       this.m_upperAngle = upper;
+      this.m_limitDirty = true;
     }
   }
 
@@ -452,9 +485,10 @@ export class RevoluteJoint extends Joint {
 
   /**
    * Get the reaction torque due to the joint limit given the inverse time step.
-   * Unit is N*m.
+   * Unit is N*m. Returns zero while the joint limit is disabled.
    */
   getReactionTorque(inv_dt: number): number {
+    if (this.m_enableLimit == false || this.m_limitState == LimitState.inactiveLimit) return 0.0;
     return inv_dt * this.m_impulse.z;
   }
 
@@ -509,6 +543,22 @@ export class RevoluteJoint extends Joint {
     this.m_motorMass = iA + iB;
     if (this.m_motorMass > 0.0) {
       this.m_motorMass = 1.0 / this.m_motorMass;
+    }
+
+    // Commit any state requested since the previous stage here, in one solver
+    // stage, instead of applying it immediately inside the setters. This keeps
+    // warm starting valid: an impulse that no longer has a constraint is reset
+    // here, before it would be applied, while impulses whose constraint stays
+    // active are preserved across limit/motor/speed switches.
+    if (this.m_motorDirty) {
+      this.m_motorImpulse = 0.0;
+      this.m_motorDirty = false;
+    }
+
+    if (this.m_limitDirty) {
+      this.m_impulse.z = 0.0;
+      this.m_limitState = LimitState.inactiveLimit;
+      this.m_limitDirty = false;
     }
 
     if (this.m_enableMotor == false || fixedRotation) {
