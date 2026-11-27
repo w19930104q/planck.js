@@ -730,10 +730,16 @@ export class DynamicTree<T> {
         continue;
       }
 
+      // Skip nodes that have been freed (removed from m_nodes) during traversal
+      if (!this.m_nodes[node.id]) {
+        continue;
+      }
+
       if (AABB.testOverlap(node.aabb, aabb)) {
         if (node.isLeaf()) {
           const proceed = queryCallback(node.id);
           if (proceed === false) {
+            this.stackPool.release(stack);
             return;
           }
         } else {
@@ -786,6 +792,11 @@ export class DynamicTree<T> {
     while (stack.length > 0) {
       const node = stack.pop();
       if (node == null) {
+        continue;
+      }
+
+      // Skip nodes that have been freed (removed from m_nodes) during traversal
+      if (!this.m_nodes[node.id]) {
         continue;
       }
 
