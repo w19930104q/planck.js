@@ -126,6 +126,9 @@ export class World {
   /** @internal */ m_positionIterations: number;
   /** @internal */ m_t: number;
 
+  /** @internal Contacts created during findNewContacts that need update() in the same step. */
+  m_newContacts: Contact[];
+
   /** @internal */ m_step_callback: ((world: World) => unknown)[];
 
   // TODO
@@ -183,6 +186,8 @@ export class World {
     this.m_positionIterations = def.positionIterations;
 
     this.m_t = 0;
+
+    this.m_newContacts = [];
 
     this.m_step_callback = [];
   }
@@ -817,7 +822,12 @@ export class World {
 
     // If new fixtures were added, we need to find the new contacts.
     if (this.m_newFixture) {
+      this.m_newContacts.length = 0;
       this.findNewContacts();
+      for (let i = 0; i < this.m_newContacts.length; ++i) {
+        this.m_newContacts[i].update(this);
+      }
+      this.m_newContacts.length = 0;
       this.m_newFixture = false;
     }
 
@@ -851,7 +861,15 @@ export class World {
         b.synchronizeFixtures();
       }
       // Look for new contacts.
+      this.m_newContacts.length = 0;
       this.findNewContacts();
+
+      // Immediately update newly created contacts so that begin-contact
+      // events fire in the same step (needed for sensor-toggle scenarios).
+      for (let i = 0; i < this.m_newContacts.length; ++i) {
+        this.m_newContacts[i].update(this);
+      }
+      this.m_newContacts.length = 0;
     }
 
     // Handle TOI events.
@@ -958,6 +976,7 @@ export class World {
     this.m_contactList = contact;
 
     ++this.m_contactCount;
+    this.m_newContacts.push(contact);
   }
 
   /**
@@ -978,6 +997,13 @@ export class World {
       const bodyB = fixtureB.getBody();
 
       // Is this contact flagged for filtering?
+      if (c.m_sensorFlag) {
+        // Sensor state changed on one of the fixtures — destroy so a clean
+        // contact is recreated by findNewContacts later in this step.
+        this.destroyContact(c);
+        continue;
+      }
+
       if (c.m_filterFlag) {
         if (bodyB.shouldCollide(bodyA) == false) {
           this.destroyContact(c);

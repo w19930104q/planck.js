@@ -3,6 +3,7 @@ import { describe, it, expect } from "vitest";
 import { Vec2 } from "../common/Vec2";
 import { World } from "../dynamics/World";
 import { BoxShape } from "../collision/shape/BoxShape";
+import { PolygonShape } from "../collision/shape/PolygonShape";
 
 // registers Box-Box collision
 import "../collision/shape/CollidePolygon";
@@ -69,5 +70,61 @@ describe("World", function (): void {
     expect(position.x).closeTo(0.0, 1e-5);
     expect(position.y).closeTo(1.015, 5e-5);
     expect(angle).closeTo(0.0, 1e-5);
+  });
+
+  it("sensor toggle fires clean begin/end events on next step", function (): void {
+    const world = new World(new Vec2(0, 0));
+
+    // Two overlapping polygons
+    const polyA = new PolygonShape([
+      new Vec2(-1, -1),
+      new Vec2(1, -1),
+      new Vec2(1, 1),
+      new Vec2(-1, 1),
+    ]);
+    const polyB = new PolygonShape([
+      new Vec2(-0.5, -0.5),
+      new Vec2(1.5, -0.5),
+      new Vec2(1.5, 1.5),
+      new Vec2(-0.5, 1.5),
+    ]);
+
+    const bodyA = world.createBody({ type: "dynamic", position: new Vec2(0, 0) });
+    const bodyB = world.createBody({ type: "dynamic", position: new Vec2(0, 0) });
+
+    const fixA = bodyA.createFixture(polyA);
+    const fixB = bodyB.createFixture(polyB);
+
+    const events: string[] = [];
+    world.on("begin-contact", () => events.push("begin"));
+    world.on("end-contact", () => events.push("end"));
+
+    // Step 0: establish initial contact
+    world.step(1 / 60);
+    expect(events).toEqual(["begin"]);
+    events.length = 0;
+
+    // Step 1: change fixA to sensor — old solid contact should end,
+    // new sensor contact should begin
+    fixA.setSensor(true);
+    world.step(1 / 60);
+    expect(events).toEqual(["end", "begin"]);
+    events.length = 0;
+
+    // Step 2: running as sensor, shapes still overlap — no new events
+    world.step(1 / 60);
+    expect(events).toEqual([]);
+    events.length = 0;
+
+    // Step 3: change fixA back to non-sensor — old sensor contact should end,
+    // new solid contact should begin
+    fixA.setSensor(false);
+    world.step(1 / 60);
+    expect(events).toEqual(["end", "begin"]);
+    events.length = 0;
+
+    // Step 4: running as solid, shapes still overlap — no new events
+    world.step(1 / 60);
+    expect(events).toEqual([]);
   });
 });

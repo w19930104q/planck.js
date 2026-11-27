@@ -175,6 +175,8 @@ export class Contact {
   m_touchingFlag = false;
   /** @internal This contact needs filtering because a fixture filter was changed. */
   m_filterFlag = false;
+  /** @internal This contact needs to be destroyed because a fixture sensor state changed. */
+  m_sensorFlag = false;
   /** @internal This bullet contact had a TOI event */
   m_bulletHitFlag = false;
 
@@ -246,6 +248,7 @@ export class Contact {
     this.m_islandFlag = false;
     this.m_touchingFlag = false;
     this.m_filterFlag = false;
+    this.m_sensorFlag = false;
     this.m_bulletHitFlag = false;
 
     this.m_impulse.recycle();

@@ -241,8 +241,29 @@ export class Fixture {
    */
   setSensor(sensor: boolean): void {
     if (sensor != this.m_isSensor) {
-      this.m_body.setAwake(true);
       this.m_isSensor = sensor;
+      this.m_body.setAwake(true);
+
+      // Flag associated contacts for sensor-state-driven destruction,
+      // and touch broad-phase proxies so findNewContacts can recreate them.
+      let edge = this.m_body.getContactList();
+      while (edge) {
+        const contact = edge.contact;
+        const fixtureA = contact.getFixtureA();
+        const fixtureB = contact.getFixtureB();
+        if (fixtureA == this || fixtureB == this) {
+          contact.m_sensorFlag = true;
+        }
+        edge = edge.next;
+      }
+
+      const world = this.m_body.getWorld();
+      if (world != null) {
+        const broadPhase = world.m_broadPhase;
+        for (let i = 0; i < this.m_proxyCount; ++i) {
+          broadPhase.touchProxy(this.m_proxies[i].proxyId);
+        }
+      }
     }
   }
 
