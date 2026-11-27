@@ -21,6 +21,7 @@ import { JointEdge } from "./Joint";
 import { World } from "./World";
 import { ContactEdge } from "./Contact";
 import { Style } from "../util/Testbed";
+import { Pool } from "../util/Pool";
 
 /** @internal */ const _ASSERT = typeof ASSERT === "undefined" ? false : ASSERT;
 
@@ -210,65 +211,43 @@ export class Body {
   /** @hidden @experimental Similar to userData, but used by dev-tools or runtime environment. */
   appData: Record<string, any> = {};
 
-  /** @internal */
-  constructor(world: World, def: BodyDef) {
-    def = options(def, BodyDefDefault);
+  /** @internal Reset all fields to defaults before returning to pool. */
+  recycle(): void {
+    this.m_world = null;
 
-    if (_ASSERT) console.assert(Vec2.isValid(def.position));
-    if (_ASSERT) console.assert(Vec2.isValid(def.linearVelocity));
-    if (_ASSERT) console.assert(Number.isFinite(def.angle));
-    if (_ASSERT) console.assert(Number.isFinite(def.angularVelocity));
-    if (_ASSERT) console.assert(Number.isFinite(def.angularDamping) && def.angularDamping >= 0.0);
-    if (_ASSERT) console.assert(Number.isFinite(def.linearDamping) && def.linearDamping >= 0.0);
-
-    this.m_world = world;
-
-    this.m_awakeFlag = def.awake;
-    this.m_autoSleepFlag = def.allowSleep;
-    this.m_bulletFlag = def.bullet;
-    this.m_fixedRotationFlag = def.fixedRotation;
-    this.m_activeFlag = def.active;
+    this.m_awakeFlag = true;
+    this.m_autoSleepFlag = true;
+    this.m_bulletFlag = false;
+    this.m_fixedRotationFlag = false;
+    this.m_activeFlag = true;
 
     this.m_islandFlag = false;
     this.m_toiFlag = false;
 
-    this.m_userData = def.userData;
-    this.m_type = def.type;
+    this.m_userData = null;
+    this.m_type = STATIC;
 
-    if (this.m_type == DYNAMIC) {
-      this.m_mass = 1.0;
-      this.m_invMass = 1.0;
-    } else {
-      this.m_mass = 0.0;
-      this.m_invMass = 0.0;
-    }
+    this.m_mass = 0.0;
+    this.m_invMass = 0.0;
 
-    // Rotational inertia about the center of mass.
     this.m_I = 0.0;
     this.m_invI = 0.0;
 
-    // the body origin transform
     this.m_xf = Transform.identity();
-    this.m_xf.p.setVec2(def.position);
-    this.m_xf.q.setAngle(def.angle);
+    this.m_sweep.recycle();
 
-    // the swept motion for CCD
-    this.m_sweep = new Sweep();
-    this.m_sweep.setTransform(this.m_xf);
-
-    // position and velocity correction
     this.c_velocity = new Velocity();
     this.c_position = new Position();
 
     this.m_force = Vec2.zero();
     this.m_torque = 0.0;
 
-    this.m_linearVelocity = Vec2.clone(def.linearVelocity);
-    this.m_angularVelocity = def.angularVelocity;
+    this.m_linearVelocity = Vec2.zero();
+    this.m_angularVelocity = 0.0;
 
-    this.m_linearDamping = def.linearDamping;
-    this.m_angularDamping = def.angularDamping;
-    this.m_gravityScale = def.gravityScale;
+    this.m_linearDamping = 0.0;
+    this.m_angularDamping = 0.0;
+    this.m_gravityScale = 1.0;
 
     this.m_sleepTime = 0.0;
 
@@ -281,9 +260,13 @@ export class Body {
 
     this.m_destroyed = false;
 
-    if (typeof def.style === "object" && def.style !== null) {
-      this.style = def.style;
-    }
+    this.style = {};
+    this.appData = {};
+  }
+
+  /** @internal */
+  constructor(world: World, def: BodyDef) {
+    this._init(world, def);
   }
 
   /** @hidden */
@@ -1086,7 +1069,7 @@ export class Body {
       return null;
     }
 
-    const fixture = new Fixture(this, shape, fixdef);
+    const fixture = Fixture._create(this, shape, fixdef);
     this._addFixture(fixture);
     this.m_world.publish("add-fixture", fixture);
     return fixture;
@@ -1156,6 +1139,7 @@ export class Body {
     fixture.m_body = null;
     fixture.m_next = null;
 
+    Fixture._release(fixture);
     this.m_world.publish("remove-fixture", fixture);
 
     // Reset the mass data.
@@ -1189,4 +1173,93 @@ export class Body {
   getLocalVector(worldVector: Vec2Value): Vec2 {
     return Rot.mulTVec2(this.m_xf.q, worldVector);
   }
+
+  /** @internal Initialize body from definition. Called by constructor and pool allocator. */
+  _init(world: World, def: BodyDef): void {
+    if (world == null || def == null) {
+      return;
+    }
+    def = options(def, BodyDefDefault);
+
+    if (_ASSERT) console.assert(Vec2.isValid(def.position));
+    if (_ASSERT) console.assert(Vec2.isValid(def.linearVelocity));
+    if (_ASSERT) console.assert(Number.isFinite(def.angle));
+    if (_ASSERT) console.assert(Number.isFinite(def.angularVelocity));
+    if (_ASSERT) console.assert(Number.isFinite(def.angularDamping) && def.angularDamping >= 0.0);
+    if (_ASSERT) console.assert(Number.isFinite(def.linearDamping) && def.linearDamping >= 0.0);
+
+    this.m_world = world;
+
+    this.m_awakeFlag = def.awake;
+    this.m_autoSleepFlag = def.allowSleep;
+    this.m_bulletFlag = def.bullet;
+    this.m_fixedRotationFlag = def.fixedRotation;
+    this.m_activeFlag = def.active;
+
+    this.m_islandFlag = false;
+    this.m_toiFlag = false;
+
+    this.m_userData = def.userData;
+    this.m_type = def.type;
+
+    if (this.m_type == DYNAMIC) {
+      this.m_mass = 1.0;
+      this.m_invMass = 1.0;
+    } else {
+      this.m_mass = 0.0;
+      this.m_invMass = 0.0;
+    }
+
+    // Rotational inertia about the center of mass.
+    this.m_I = 0.0;
+    this.m_invI = 0.0;
+
+    // the body origin transform
+    this.m_xf = Transform.identity();
+    this.m_xf.p.setVec2(def.position);
+    this.m_xf.q.setAngle(def.angle);
+
+    // the swept motion for CCD
+    this.m_sweep = new Sweep();
+    this.m_sweep.setTransform(this.m_xf);
+
+    // position and velocity correction
+    this.c_velocity = new Velocity();
+    this.c_position = new Position();
+
+    this.m_force = Vec2.zero();
+    this.m_torque = 0.0;
+
+    this.m_linearVelocity = Vec2.clone(def.linearVelocity);
+    this.m_angularVelocity = def.angularVelocity;
+
+    this.m_linearDamping = def.linearDamping;
+    this.m_angularDamping = def.angularDamping;
+    this.m_gravityScale = def.gravityScale;
+
+    this.m_sleepTime = 0.0;
+
+    this.m_jointList = null;
+    this.m_contactList = null;
+    this.m_fixtureList = null;
+
+    this.m_prev = null;
+    this.m_next = null;
+
+    this.m_destroyed = false;
+
+    if (typeof def.style === "object" && def.style !== null) {
+      this.style = def.style;
+    }
+  }
 }
+
+/** @internal */
+export const bodyPool = new Pool<Body>({
+  create(): Body {
+    return new Body(undefined as any, undefined as any);
+  },
+  release(body: Body): void {
+    body.recycle();
+  },
+});

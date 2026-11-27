@@ -11,7 +11,7 @@ import { options } from "../util/options";
 import { Vec2, Vec2Value } from "../common/Vec2";
 import { BroadPhase } from "../collision/BroadPhase";
 import { Solver, ContactImpulse, TimeStep } from "./Solver";
-import { Body, BodyDef } from "./Body";
+import { Body, BodyDef, bodyPool } from "./Body";
 import { Joint } from "./Joint";
 import { Contact } from "./Contact";
 import { AABBValue, RayCastInput, RayCastOutput } from "../collision/AABB";
@@ -539,7 +539,8 @@ export class World {
       def = arg1;
     }
 
-    const body = new Body(this, def);
+    const body = bodyPool.allocate();
+    body._init(this, def);
     this._addBody(body);
     return body;
   }
@@ -625,6 +626,7 @@ export class World {
 
       this.publish("remove-fixture", f0);
       f0.destroyProxies(this.m_broadPhase);
+      Fixture._release(f0);
 
       b.m_fixtureList = f;
     }
@@ -648,6 +650,8 @@ export class World {
     --this.m_bodyCount;
 
     this.publish("remove-body", b);
+
+    bodyPool.release(b);
 
     return true;
   }

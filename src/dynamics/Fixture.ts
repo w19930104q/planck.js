@@ -16,6 +16,7 @@ import { Body, MassData } from "./Body";
 import { BroadPhase } from "../collision/BroadPhase";
 import { TransformValue } from "../common/Transform";
 import { Style } from "../util/Testbed";
+import { Pool } from "../util/Pool";
 
 /** @internal */ const _ASSERT = typeof ASSERT === "undefined" ? false : ASSERT;
 
@@ -125,51 +126,37 @@ export class Fixture {
   /** @hidden @experimental Similar to userData, but used by dev-tools or runtime environment. */
   appData: Record<string, any> = {};
 
-  constructor(body: Body, def: FixtureDef);
-  constructor(body: Body, shape: Shape, def?: FixtureOpt);
-  constructor(body: Body, shape: Shape, density?: number);
-  /** @internal */
-  constructor(body: Body, shape?, def?) {
-    if (shape.shape) {
-      def = shape;
-      shape = shape.shape;
-    } else if (typeof def === "number") {
-      def = { density: def };
-    }
+  /** @internal Reset all fields to defaults before returning to pool. */
+  recycle(): void {
+    this.m_body = null;
 
-    def = options(def, FixtureDefDefault);
+    this.m_friction = FixtureDefDefault.friction;
+    this.m_restitution = FixtureDefDefault.restitution;
+    this.m_density = FixtureDefDefault.density;
+    this.m_isSensor = FixtureDefDefault.isSensor;
 
-    this.m_body = body;
+    this.m_filterGroupIndex = FixtureDefDefault.filterGroupIndex;
+    this.m_filterCategoryBits = FixtureDefDefault.filterCategoryBits;
+    this.m_filterMaskBits = FixtureDefDefault.filterMaskBits;
 
-    this.m_friction = def.friction;
-    this.m_restitution = def.restitution;
-    this.m_density = def.density;
-    this.m_isSensor = def.isSensor;
-
-    this.m_filterGroupIndex = def.filterGroupIndex;
-    this.m_filterCategoryBits = def.filterCategoryBits;
-    this.m_filterMaskBits = def.filterMaskBits;
-
-    // TODO validate shape
-    this.m_shape = shape; // .clone();
-
+    this.m_shape = null;
     this.m_next = null;
 
     this.m_proxies = [];
     this.m_proxyCount = 0;
 
-    // fixture proxies are created here,
-    // but they are activate in when a fixture is added to body
-    const childCount = this.m_shape.getChildCount();
-    for (let i = 0; i < childCount; ++i) {
-      this.m_proxies[i] = new FixtureProxy(this, i);
-    }
+    this.m_userData = null;
 
-    this.m_userData = def.userData;
+    this.style = {};
+    this.appData = {};
+  }
 
-    if (typeof def.style === "object" && def.style !== null) {
-      this.style = def.style;
-    }
+  constructor(body: Body, def: FixtureDef);
+  constructor(body: Body, shape: Shape, def?: FixtureOpt);
+  constructor(body: Body, shape: Shape, density?: number);
+  /** @internal */
+  constructor(body: Body, shape?, def?) {
+    this._init(body, shape, def);
   }
 
   /** @hidden Re-setup fixture. */
@@ -502,4 +489,73 @@ export class Fixture {
     const collide = collideA && collideB;
     return collide;
   }
+
+  /** @internal Initialize fixture from definition. Called by constructor and pool allocator. */
+  _init(body: Body, shape?, def?): void {
+    if (shape == null) {
+      return;
+    }
+    if (shape.shape) {
+      def = shape;
+      shape = shape.shape;
+    } else if (typeof def === "number") {
+      def = { density: def };
+    }
+
+    def = options(def, FixtureDefDefault);
+
+    this.m_body = body;
+
+    this.m_friction = def.friction;
+    this.m_restitution = def.restitution;
+    this.m_density = def.density;
+    this.m_isSensor = def.isSensor;
+
+    this.m_filterGroupIndex = def.filterGroupIndex;
+    this.m_filterCategoryBits = def.filterCategoryBits;
+    this.m_filterMaskBits = def.filterMaskBits;
+
+    // TODO validate shape
+    this.m_shape = shape; // .clone();
+
+    this.m_next = null;
+
+    this.m_proxies = [];
+    this.m_proxyCount = 0;
+
+    // fixture proxies are created here,
+    // but they are activate in when a fixture is added to body
+    const childCount = this.m_shape.getChildCount();
+    for (let i = 0; i < childCount; ++i) {
+      this.m_proxies[i] = new FixtureProxy(this, i);
+    }
+
+    this.m_userData = def.userData;
+
+    if (typeof def.style === "object" && def.style !== null) {
+      this.style = def.style;
+    }
+  }
+
+  /** @internal Allocate a fixture from pool and initialize it. */
+  static _create(body: Body, shape?, def?): Fixture {
+    const fixture = fixturePool.allocate();
+    fixture._init(body, shape, def);
+    return fixture;
+  }
+
+  /** @internal Release a fixture back to pool. */
+  static _release(fixture: Fixture): void {
+    fixturePool.release(fixture);
+  }
 }
+
+/** @internal */
+const fixturePool = new Pool<Fixture>({
+  create(): Fixture {
+    return new Fixture(undefined as any, undefined as any, undefined as any);
+  },
+  release(fixture: Fixture): void {
+    fixture.recycle();
+  },
+});
